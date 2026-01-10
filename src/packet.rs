@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 
 use anyhow::anyhow;
+use minecraft_derive::MinecraftData;
 
 use crate::datatypes::{Error, MString, MinecraftData, VarInt};
 
@@ -61,7 +62,7 @@ impl MinecraftData for HandshakeIntent {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, MinecraftData)]
 pub struct HandshakePacket {
     protocol_version: VarInt,
     server_address: MString<255>,
@@ -89,78 +90,18 @@ impl Packet for HandshakePacket {
     const ID: VarInt = VarInt(0x00);
 }
 
-impl MinecraftData for HandshakePacket {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
-        let protocol_version = VarInt::decode(reader)?;
-        let server_address = MString::decode(reader)?;
-        let server_port = u16::decode(reader)?;
-        let intent = HandshakeIntent::decode(reader)?;
-        Ok(Self {
-            protocol_version,
-            server_address,
-            server_port,
-            intent,
-        })
-    }
-
-    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
-        self.protocol_version.encode(writer)?;
-        self.server_address.encode(writer)?;
-        self.server_port.encode(writer)?;
-        self.intent.encode(writer)?;
-        Ok(())
-    }
-
-    fn len(&self) -> usize {
-        self.protocol_version.len()
-            + self.server_address.len()
-            + self.server_port.len()
-            + self.intent.len()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct StatusRequestPacket();
+#[derive(Debug, Clone, Copy, MinecraftData)]
+pub struct StatusRequestPacket;
 
 impl Packet for StatusRequestPacket {
     const ID: VarInt = VarInt(0x00);
 }
 
-impl MinecraftData for StatusRequestPacket {
-    fn decode<R: Read>(_reader: &mut R) -> Result<Self, Error> {
-        Ok(Self())
-    }
-
-    fn encode<W: Write>(self, _writer: &mut W) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn len(&self) -> usize {
-        0
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, MinecraftData)]
 pub struct StatusResponsePacket {
     pub json_response: MString<32767>,
 }
 
 impl Packet for StatusResponsePacket {
     const ID: VarInt = VarInt(0x00);
-}
-
-impl MinecraftData for StatusResponsePacket {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
-        let json_response = MString::decode(reader)?;
-        Ok(StatusResponsePacket { json_response })
-    }
-
-    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
-        self.json_response.encode(writer)?;
-        Ok(())
-    }
-
-    fn len(&self) -> usize {
-        self.json_response.len()
-    }
 }

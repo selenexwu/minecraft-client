@@ -26,7 +26,7 @@ fn main() -> Result<()> {
         port,
         HandshakeIntent::Status,
     );
-    let status_req_packet = StatusRequestPacket();
+    let status_req_packet = StatusRequestPacket;
     handshake_packet.encode_packet(&mut writer)?;
     status_req_packet.encode_packet(&mut writer)?;
     writer.flush()?;
