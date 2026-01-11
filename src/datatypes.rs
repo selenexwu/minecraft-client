@@ -240,3 +240,24 @@ pub struct Tag {
     name: Identifier,
     entries: Vec<VarInt>,
 }
+
+#[derive(Debug, Clone, Copy, MinecraftData)]
+pub struct Position(i64);
+
+impl Position {
+    pub fn new(x: i32, y: i32, z: i32) -> Self {
+        Position(
+            ((x as i64 & 0x3FFFFFF) << 38) | ((z as i64 & 0x3FFFFFF) << 12) | (y as i64 & 0xFFF),
+        )
+    }
+
+    pub fn x(&self) -> i32 {
+        (self.0 >> 38) as i32
+    }
+    pub fn y(&self) -> i32 {
+        (self.0 << 52 >> 52) as i32
+    }
+    pub fn z(&self) -> i32 {
+        (self.0 << 26 >> 38) as i32
+    }
+}

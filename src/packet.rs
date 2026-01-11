@@ -3,7 +3,9 @@ use std::io::{Read, Write};
 use anyhow::anyhow;
 use minecraft_derive::MinecraftData;
 
-use crate::datatypes::{Error, GameProfile, Identifier, MString, MinecraftData, Tag, VarInt, UUID};
+use crate::datatypes::{
+    Error, GameProfile, Identifier, MString, MinecraftData, Position, Tag, VarInt, UUID,
+};
 
 pub trait Packet: MinecraftData {
     const ID: VarInt;
@@ -292,3 +294,53 @@ pub struct ServerboundPlayKeepAlivePacket {
 impl Packet for ServerboundPlayKeepAlivePacket {
     const ID: VarInt = VarInt(0x1B);
 }
+
+#[derive(Debug, Clone, MinecraftData)]
+pub struct PlayLoginPacket {
+    entity_id: i32,
+    is_hardcore: bool,
+    dimension_names: Vec<Identifier>,
+    max_players: VarInt,
+    view_distance: VarInt,
+    simulation_distance: VarInt,
+    reduced_debug_info: bool,
+    enable_respawn_screen: bool,
+    do_limited_crafting: bool,
+    dimension_type: VarInt,
+    dimension_name: Identifier,
+    hashed_seed: i64,
+    game_mode: u8,
+    previous_game_mode: i8,
+    is_debug: bool,
+    is_flat: bool,
+    has_death_location: bool,
+    #[present_if(has_death_location)]
+    death_dimention_name: Option<Identifier>,
+    #[present_if(has_death_location)]
+    death_location: Option<Position>,
+    portal_cooldown: VarInt,
+    sea_level: VarInt,
+    enforced_secure_chat: bool,
+}
+
+impl Packet for PlayLoginPacket {
+    const ID: VarInt = VarInt(0x30);
+}
+
+// impl MinecraftData for PlayLoginPacket {
+//     fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
+//         todo!()
+//     }
+
+//     fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
+//         todo!()
+//     }
+
+//     fn len(&self) -> usize {
+//         if let Some(val) = &self.death_dimention_name {
+//             crate::datatypes::MinecraftData::len(val)
+//         } else {
+//             0
+//         }
+//     }
+// }

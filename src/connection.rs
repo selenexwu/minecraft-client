@@ -13,8 +13,9 @@ use crate::{
         ClientboundPlayKeepAlivePacket, ConfigurationKeepAlivePacket,
         ConfigurationUpdateTagsPacket, FeatureFlagsPacket, FinishConfigurationPacket,
         HandshakeIntent, HandshakePacket, LoginAcknowledgedPacket, LoginStartPacket,
-        LoginSuccessPacket, Packet, PacketHeader, RegistryDataPacket, ServerboundKnownPacksPacket,
-        ServerboundPlayKeepAlivePacket, StatusRequestPacket, StatusResponsePacket,
+        LoginSuccessPacket, Packet, PacketHeader, PlayLoginPacket, RegistryDataPacket,
+        ServerboundKnownPacksPacket, ServerboundPlayKeepAlivePacket, StatusRequestPacket,
+        StatusResponsePacket,
     },
 };
 
@@ -103,8 +104,7 @@ impl Connection {
         // let resp = self.recv_packet::<EncryptionRequestPacket>()?;
         // eprintln!("{:?}", resp);
 
-        // let key: RsaPublicKey =
-        //     SubjectPublicKeyInfoRef::try_from(resp.public_key.as_slice())?.try_into()?;
+        // let key = RsaPublicKey::from_public_key_der(&resp.public_key)?;
         // eprintln!("{:?}", key);
 
         // TODO: enable compression
@@ -120,9 +120,7 @@ impl Connection {
 
     pub fn configure(&mut self) -> Result<()> {
         loop {
-            // TODO: macro for handling packets
             let resp_header = self.recv_packet_header()?;
-            eprintln!("{:?}", resp_header);
             match resp_header.id {
                 val if val == ClientboundConfigurationPluginMessagePacket::ID => {
                     let resp = self.recv_packet::<ClientboundConfigurationPluginMessagePacket>()?;
@@ -162,6 +160,7 @@ impl Connection {
                     break;
                 }
                 _ => {
+                    eprintln!("{:?}", resp_header);
                     let resp = self.recv_packet_raw(&resp_header)?;
                     eprintln!("{:?}", resp);
                     break;
@@ -175,19 +174,23 @@ impl Connection {
     pub fn play(&mut self) -> Result<()> {
         loop {
             let resp_header = self.recv_packet_header()?;
-            eprintln!("{:?}", resp_header);
             match resp_header.id {
                 val if val == ClientboundPlayKeepAlivePacket::ID => {
                     let resp = self.recv_packet::<ClientboundPlayKeepAlivePacket>()?;
-                    eprintln!("{:?}", resp);
+                    // eprintln!("{:?}", resp);
                     self.send_packet(ServerboundPlayKeepAlivePacket {
                         keep_alive_id: resp.keep_alive_id,
                     })?;
                 }
+                val if val == PlayLoginPacket::ID => {
+                    let resp = self.recv_packet::<PlayLoginPacket>()?;
+                    eprintln!("{:?}", resp);
+                }
                 _ => {
+                    eprintln!("{:?}", resp_header);
                     let resp = self.recv_packet_raw(&resp_header)?;
                     // eprintln!("{:?}", resp);
-                    // break;
+                    break;
                 }
             }
         }
