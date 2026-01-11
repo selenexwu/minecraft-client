@@ -4,7 +4,8 @@ use anyhow::anyhow;
 use minecraft_derive::MinecraftData;
 
 use crate::datatypes::{
-    Error, GameProfile, Identifier, MString, MinecraftData, Position, Tag, VarInt, UUID,
+    Error, GameProfile, IDSet, Identifier, MString, MinecraftData, Position, SlotDisplay, Tag,
+    VarInt, UUID,
 };
 
 pub trait Packet: MinecraftData {
@@ -16,7 +17,7 @@ pub trait Packet: MinecraftData {
     }
 
     fn encode_packet<W: Write>(self, writer: &mut W) -> Result<(), Error> {
-        let len = Self::ID.len() + self.len();
+        let len = Self::ID.num_bytes() + self.num_bytes();
         VarInt(len as i32).encode(writer)?;
         Self::ID.encode(writer)?;
         self.encode(writer)?;
@@ -36,37 +37,14 @@ pub struct PacketHeader {
     pub id: VarInt,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, MinecraftData)]
 pub enum HandshakeIntent {
+    #[mc_repr(VarInt(1))]
     Status,
+    #[mc_repr(VarInt(2))]
     Login,
+    #[mc_repr(VarInt(3))]
     Transfer,
-}
-
-impl MinecraftData for HandshakeIntent {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
-        let mut buf = [0u8];
-        reader.read_exact(&mut buf)?;
-        match buf[0] {
-            0x1 => Ok(Self::Status),
-            0x2 => Ok(Self::Login),
-            0x3 => Ok(Self::Transfer),
-            _ => Err(anyhow!("invalid handshake intent")),
-        }
-    }
-
-    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
-        writer.write_all(&[match self {
-            Self::Status => 0x1,
-            Self::Login => 0x2,
-            Self::Transfer => 0x3,
-        }])?;
-        Ok(())
-    }
-
-    fn len(&self) -> usize {
-        1
-    }
 }
 
 #[derive(Debug, Clone, MinecraftData)]
@@ -176,10 +154,10 @@ impl MinecraftData for ClientboundConfigurationPluginMessagePacket {
         Ok(())
     }
 
-    fn len(&self) -> usize {
-        self.data.identifier().len()
+    fn num_bytes(&self) -> usize {
+        self.data.identifier().num_bytes()
             + match &self.data {
-                PluginChannelData::MinecraftBrand(brand) => brand.len(),
+                PluginChannelData::MinecraftBrand(brand) => brand.num_bytes(),
                 PluginChannelData::Unknown(_) => 0,
             }
     }
@@ -327,20 +305,77 @@ impl Packet for PlayLoginPacket {
     const ID: VarInt = VarInt(0x30);
 }
 
-// impl MinecraftData for PlayLoginPacket {
-//     fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
-//         todo!()
-//     }
+#[derive(Debug, Clone, Copy, MinecraftData)]
+pub enum Difficulty {
+    #[mc_repr(VarInt(0))]
+    Peaceful,
+    #[mc_repr(VarInt(1))]
+    Easy,
+    #[mc_repr(VarInt(2))]
+    Normal,
+    #[mc_repr(VarInt(3))]
+    Hard,
+}
 
-//     fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
-//         todo!()
-//     }
+#[derive(Debug, Clone, MinecraftData)]
+pub struct ChangeDifficultyPacket {
+    pub difficulty: Difficulty,
+    pub difficulty_locked: bool,
+}
 
-//     fn len(&self) -> usize {
-//         if let Some(val) = &self.death_dimention_name {
-//             crate::datatypes::MinecraftData::len(val)
-//         } else {
-//             0
-//         }
-//     }
-// }
+impl Packet for ChangeDifficultyPacket {
+    const ID: VarInt = VarInt(0x0A);
+}
+
+#[derive(Debug, Clone, MinecraftData)]
+pub struct ClientboundPlayerAbilitiesPacket {
+    pub flags: u8,
+    pub flying_speed: f32,
+    pub fov_modifier: f32,
+}
+
+impl Packet for ClientboundPlayerAbilitiesPacket {
+    const ID: VarInt = VarInt(0x3E);
+}
+
+#[derive(Debug, Clone, MinecraftData)]
+pub struct SetHealthPacket {
+    pub health: f32,
+    pub food: VarInt,
+    pub food_saturation: f32,
+}
+
+impl Packet for SetHealthPacket {
+    const ID: VarInt = VarInt(0x66);
+}
+
+#[derive(Debug, Clone, MinecraftData)]
+pub struct ClientboundSetHeldItemPacket {
+    pub slot: VarInt,
+}
+
+impl Packet for ClientboundSetHeldItemPacket {
+    const ID: VarInt = VarInt(0x67);
+}
+
+#[derive(Debug, Clone, MinecraftData)]
+pub struct PropertySet {
+    pub id: Identifier,
+    pub items: Vec<VarInt>,
+}
+
+#[derive(Debug, Clone, MinecraftData)]
+pub struct StonecutterRecipe {
+    pub ingredients: IDSet,
+    pub slot_display: SlotDisplay,
+}
+
+#[derive(Debug, Clone, MinecraftData)]
+pub struct UpdateRecipesPacket {
+    pub property_sets: Vec<PropertySet>,
+    pub stonecutter_recipes: Vec<StonecutterRecipe>,
+}
+
+impl Packet for UpdateRecipesPacket {
+    const ID: VarInt = VarInt(0x83);
+}

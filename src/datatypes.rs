@@ -1,16 +1,33 @@
 use anyhow::anyhow;
 use minecraft_derive::MinecraftData;
 use std::{
-    fmt::Display,
+    fmt::{Debug, Display},
     io::{Read, Write},
+    ptr::with_exposed_provenance,
 };
 
 pub type Error = anyhow::Error;
 
-pub trait MinecraftData: Sized {
+pub trait MinecraftData: Sized + Debug {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, Error>;
     fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error>;
-    fn len(&self) -> usize;
+    fn num_bytes(&self) -> usize;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UnimplementedData;
+impl MinecraftData for UnimplementedData {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
+        unimplemented!("decode UnimplementedData")
+    }
+
+    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
+        unimplemented!("encode UnimplementedData")
+    }
+
+    fn num_bytes(&self) -> usize {
+        unimplemented!("num_bytes UnimplementedData")
+    }
 }
 
 const SEGMENT_BITS: u8 = 0x7F;
@@ -50,7 +67,7 @@ impl MinecraftData for VarInt {
         }
     }
 
-    fn len(&self) -> usize {
+    fn num_bytes(&self) -> usize {
         if self.0 == 0 {
             return 1;
         }
@@ -75,7 +92,7 @@ impl<const N: usize> TryFrom<String> for MString<N> {
 
 impl<const N: usize> Display for MString<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        std::fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -104,20 +121,20 @@ impl<const N: usize> MinecraftData for MString<N> {
         Ok(())
     }
 
-    fn len(&self) -> usize {
-        VarInt(self.0.len() as i32).len() + self.0.len()
+    fn num_bytes(&self) -> usize {
+        VarInt(self.0.len() as i32).num_bytes() + self.0.len()
     }
 }
 
 pub type Identifier = MString<32767>;
 
-macro_rules! impl_minecraft_data_for_int {
-    ($int:ty) => {
-        impl MinecraftData for $int {
+macro_rules! impl_minecraft_data_for_num {
+    ($num:ty, $bytes:expr) => {
+        impl MinecraftData for $num {
             fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
-                let mut buf = [0u8; <$int>::BITS as usize / 8];
+                let mut buf = [0u8; $bytes];
                 reader.read_exact(&mut buf)?;
-                Ok(<$int>::from_be_bytes(buf))
+                Ok(<$num>::from_be_bytes(buf))
             }
 
             fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
@@ -125,10 +142,16 @@ macro_rules! impl_minecraft_data_for_int {
                 Ok(())
             }
 
-            fn len(&self) -> usize {
-                <$int>::BITS as usize / 8
+            fn num_bytes(&self) -> usize {
+                $bytes
             }
         }
+    };
+}
+
+macro_rules! impl_minecraft_data_for_int {
+    ($int:ty) => {
+        impl_minecraft_data_for_num!($int, <$int>::BITS as usize / 8);
     };
 }
 
@@ -142,6 +165,8 @@ impl_minecraft_data_for_int!(i16);
 impl_minecraft_data_for_int!(i32);
 impl_minecraft_data_for_int!(i64);
 impl_minecraft_data_for_int!(i128);
+impl_minecraft_data_for_num!(f32, 4);
+impl_minecraft_data_for_num!(f64, 8);
 
 #[derive(Debug, Clone, Copy, MinecraftData)]
 pub struct UUID(pub u128);
@@ -165,31 +190,63 @@ impl MinecraftData for bool {
         Ok(())
     }
 
-    fn len(&self) -> usize {
+    fn num_bytes(&self) -> usize {
         1
+    }
+}
+
+fn decode_array<R: Read, T: MinecraftData>(len: usize, reader: &mut R) -> Result<Vec<T>, Error> {
+    let mut res = Vec::with_capacity(len);
+    for _ in 0..len {
+        res.push(T::decode(reader)?)
+    }
+    Ok(res)
+}
+
+fn encode_array<W: Write, T: MinecraftData, I: IntoIterator<Item = T>>(
+    data: I,
+    writer: &mut W,
+) -> Result<(), Error> {
+    for elem in data.into_iter() {
+        elem.encode(writer)?;
+    }
+    Ok(())
+}
+
+fn num_bytes_array<'a, T: MinecraftData + 'a, I: IntoIterator<Item = &'a T>>(data: I) -> usize {
+    data.into_iter()
+        .map(MinecraftData::num_bytes)
+        .sum::<usize>()
+}
+
+impl<T: MinecraftData, const N: usize> MinecraftData for [T; N] {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
+        // cannot fail bc we know we put the right number of elements in
+        Ok(decode_array(N, reader)?.try_into().unwrap())
+    }
+
+    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
+        encode_array(self, writer)
+    }
+
+    fn num_bytes(&self) -> usize {
+        num_bytes_array(self)
     }
 }
 
 impl<T: MinecraftData> MinecraftData for Vec<T> {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
         let len = VarInt::decode(reader)?.0 as usize;
-        let mut res = Vec::with_capacity(len);
-        for _ in 0..len {
-            res.push(T::decode(reader)?)
-        }
-        Ok(res)
+        decode_array(len, reader)
     }
 
     fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
         VarInt(self.len() as i32).encode(writer)?;
-        for elem in self.into_iter() {
-            elem.encode(writer)?;
-        }
-        Ok(())
+        encode_array(self, writer)
     }
 
-    fn len(&self) -> usize {
-        VarInt(self.len() as i32).len() + self.iter().map(MinecraftData::len).sum::<usize>()
+    fn num_bytes(&self) -> usize {
+        VarInt(self.len() as i32).num_bytes() + num_bytes_array(self)
     }
 }
 
@@ -213,9 +270,9 @@ impl<T: MinecraftData> MinecraftData for Option<T> {
         }
     }
 
-    fn len(&self) -> usize {
+    fn num_bytes(&self) -> usize {
         match self {
-            Some(val) => 1 + val.len(),
+            Some(val) => 1 + val.num_bytes(),
             None => 1,
         }
     }
@@ -259,5 +316,185 @@ impl Position {
     }
     pub fn z(&self) -> i32 {
         (self.0 << 26 >> 38) as i32
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum IDSet {
+    Named(Identifier),
+    Enumerated(Vec<VarInt>),
+}
+
+impl MinecraftData for IDSet {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
+        let len = VarInt::decode(reader)?.0 as usize;
+        if len == 0 {
+            Ok(Self::Named(Identifier::decode(reader)?))
+        } else {
+            Ok(Self::Enumerated(decode_array(len - 1, reader)?))
+        }
+    }
+
+    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
+        match self {
+            Self::Named(tag) => {
+                VarInt(0).encode(writer)?;
+                tag.encode(writer)?;
+            }
+            Self::Enumerated(ids) => {
+                VarInt(ids.len() as i32 + 1).encode(writer)?;
+                encode_array(ids, writer)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn num_bytes(&self) -> usize {
+        match self {
+            Self::Named(tag) => VarInt(0).num_bytes() + tag.num_bytes(),
+            Self::Enumerated(ids) => {
+                VarInt(ids.len() as i32 + 1).num_bytes() + num_bytes_array(ids)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, MinecraftData)]
+pub struct Slot {
+    count: VarInt,
+    #[present_if(count.0 > 0)]
+    id: Option<VarInt>,
+    #[present_if(count.0 > 0)]
+    num_components_add: Option<VarInt>,
+    #[present_if(count.0 > 0)]
+    num_components_remove: Option<VarInt>,
+    #[present_if(num_components_add.is_some_and(|x| x.0 > 0))]
+    components_add: Option<UnimplementedData>,
+    #[present_if(num_components_remove.is_some_and(|x| x.0 > 0))]
+    components_remove: Option<UnimplementedData>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SlotDisplay {
+    Empty,
+    AnyFuel,
+    Item {
+        item_type: VarInt,
+    },
+    ItemStack {
+        item_stack: Slot,
+    },
+    Tag {
+        tag: Identifier,
+    },
+    SmithingTrim {
+        base: Box<SlotDisplay>,
+        material: Box<SlotDisplay>,
+        pattern: VarInt,
+    },
+    WithRemainder {
+        ingredient: Box<SlotDisplay>,
+        remainder: Box<SlotDisplay>,
+    },
+    Composite {
+        options: Vec<SlotDisplay>,
+    },
+}
+
+// TODO: this should be macroable
+impl MinecraftData for SlotDisplay {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
+        match VarInt::decode(reader)? {
+            VarInt(0) => Ok(Self::Empty),
+            VarInt(1) => Ok(Self::AnyFuel),
+            VarInt(2) => Ok(Self::Item {
+                item_type: VarInt::decode(reader)?,
+            }),
+            VarInt(3) => Ok(Self::ItemStack {
+                item_stack: Slot::decode(reader)?,
+            }),
+            VarInt(4) => Ok(Self::Tag {
+                tag: Identifier::decode(reader)?,
+            }),
+            VarInt(5) => Ok(Self::SmithingTrim {
+                base: Box::new(SlotDisplay::decode(reader)?),
+                material: Box::new(SlotDisplay::decode(reader)?),
+                pattern: VarInt::decode(reader)?,
+            }),
+            VarInt(6) => Ok(Self::WithRemainder {
+                ingredient: Box::new(SlotDisplay::decode(reader)?),
+                remainder: Box::new(SlotDisplay::decode(reader)?),
+            }),
+            VarInt(7) => Ok(Self::Composite {
+                options: Vec::decode(reader)?,
+            }),
+            _ => Err(anyhow!("Invalid SlotDisplay")),
+        }
+    }
+
+    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
+        match self {
+            SlotDisplay::Empty => VarInt(0).encode(writer),
+            SlotDisplay::AnyFuel => VarInt(1).encode(writer),
+            SlotDisplay::Item { item_type } => {
+                VarInt(2).encode(writer)?;
+                item_type.encode(writer)
+            }
+            SlotDisplay::ItemStack { item_stack } => {
+                VarInt(3).encode(writer)?;
+                item_stack.encode(writer)
+            }
+            SlotDisplay::Tag { tag } => {
+                VarInt(4).encode(writer)?;
+                tag.encode(writer)
+            }
+            SlotDisplay::SmithingTrim {
+                base,
+                material,
+                pattern,
+            } => {
+                VarInt(5).encode(writer)?;
+                base.encode(writer)?;
+                material.encode(writer)?;
+                pattern.encode(writer)
+            }
+            SlotDisplay::WithRemainder {
+                ingredient,
+                remainder,
+            } => {
+                VarInt(6).encode(writer)?;
+                ingredient.encode(writer)?;
+                remainder.encode(writer)
+            }
+            SlotDisplay::Composite { options } => {
+                VarInt(7).encode(writer)?;
+                options.encode(writer)
+            }
+        }
+    }
+
+    fn num_bytes(&self) -> usize {
+        match self {
+            SlotDisplay::Empty => VarInt(0).num_bytes(),
+            SlotDisplay::AnyFuel => VarInt(1).num_bytes(),
+            SlotDisplay::Item { item_type } => VarInt(2).num_bytes() + item_type.num_bytes(),
+            SlotDisplay::ItemStack { item_stack } => VarInt(3).num_bytes() + item_stack.num_bytes(),
+            SlotDisplay::Tag { tag } => VarInt(4).num_bytes() + tag.num_bytes(),
+            SlotDisplay::SmithingTrim {
+                base,
+                material,
+                pattern,
+            } => {
+                VarInt(5).num_bytes()
+                    + base.num_bytes()
+                    + material.num_bytes()
+                    + pattern.num_bytes()
+            }
+            SlotDisplay::WithRemainder {
+                ingredient,
+                remainder,
+            } => VarInt(6).num_bytes() + ingredient.num_bytes() + remainder.num_bytes(),
+            SlotDisplay::Composite { options } => VarInt(7).num_bytes() + options.num_bytes(),
+        }
     }
 }

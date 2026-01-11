@@ -8,14 +8,15 @@ use anyhow::Result;
 use crate::{
     datatypes::{MinecraftData, VarInt, UUID},
     packet::{
-        decode_packet_header, AcknowledgeFinishConfigurationPacket,
+        decode_packet_header, AcknowledgeFinishConfigurationPacket, ChangeDifficultyPacket,
         ClientboundConfigurationPluginMessagePacket, ClientboundKnownPacksPacket,
-        ClientboundPlayKeepAlivePacket, ConfigurationKeepAlivePacket,
-        ConfigurationUpdateTagsPacket, FeatureFlagsPacket, FinishConfigurationPacket,
-        HandshakeIntent, HandshakePacket, LoginAcknowledgedPacket, LoginStartPacket,
-        LoginSuccessPacket, Packet, PacketHeader, PlayLoginPacket, RegistryDataPacket,
-        ServerboundKnownPacksPacket, ServerboundPlayKeepAlivePacket, StatusRequestPacket,
-        StatusResponsePacket,
+        ClientboundPlayKeepAlivePacket, ClientboundPlayerAbilitiesPacket,
+        ClientboundSetHeldItemPacket, ConfigurationKeepAlivePacket, ConfigurationUpdateTagsPacket,
+        FeatureFlagsPacket, FinishConfigurationPacket, HandshakeIntent, HandshakePacket,
+        LoginAcknowledgedPacket, LoginStartPacket, LoginSuccessPacket, Packet, PacketHeader,
+        PlayLoginPacket, RegistryDataPacket, ServerboundKnownPacksPacket,
+        ServerboundPlayKeepAlivePacket, SetHealthPacket, StatusRequestPacket, StatusResponsePacket,
+        UpdateRecipesPacket,
     },
 };
 
@@ -61,7 +62,7 @@ impl Connection {
     }
 
     fn recv_packet_raw(&mut self, header: &PacketHeader) -> Result<Vec<u8>> {
-        let mut res = vec![0u8; header.len.0 as usize - header.id.len()];
+        let mut res = vec![0u8; header.len.0 as usize - header.id.num_bytes()];
         self.reader.read_exact(&mut res)?;
         Ok(res)
     }
@@ -184,6 +185,26 @@ impl Connection {
                 }
                 val if val == PlayLoginPacket::ID => {
                     let resp = self.recv_packet::<PlayLoginPacket>()?;
+                    eprintln!("{:?}", resp);
+                }
+                val if val == ChangeDifficultyPacket::ID => {
+                    let resp = self.recv_packet::<ChangeDifficultyPacket>()?;
+                    eprintln!("{:?}", resp);
+                }
+                val if val == ClientboundPlayerAbilitiesPacket::ID => {
+                    let resp = self.recv_packet::<ClientboundPlayerAbilitiesPacket>()?;
+                    eprintln!("{:?}", resp);
+                }
+                val if val == SetHealthPacket::ID => {
+                    let resp = self.recv_packet::<SetHealthPacket>()?;
+                    eprintln!("{:?}", resp);
+                }
+                val if val == ClientboundSetHeldItemPacket::ID => {
+                    let resp = self.recv_packet::<ClientboundSetHeldItemPacket>()?;
+                    eprintln!("{:?}", resp);
+                }
+                val if val == UpdateRecipesPacket::ID => {
+                    let resp = self.recv_packet::<UpdateRecipesPacket>()?;
                     eprintln!("{:?}", resp);
                 }
                 _ => {
