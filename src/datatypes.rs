@@ -3,7 +3,6 @@ use minecraft_derive::MinecraftData;
 use std::{
     fmt::{Debug, Display},
     io::{Read, Write},
-    ptr::with_exposed_provenance,
 };
 
 pub type Error = anyhow::Error;
@@ -17,11 +16,11 @@ pub trait MinecraftData: Sized + Debug {
 #[derive(Debug, Clone, Copy)]
 struct UnimplementedData;
 impl MinecraftData for UnimplementedData {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
+    fn decode<R: Read>(_reader: &mut R) -> Result<Self, Error> {
         unimplemented!("decode UnimplementedData")
     }
 
-    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
+    fn encode<W: Write>(self, _writer: &mut W) -> Result<(), Error> {
         unimplemented!("encode UnimplementedData")
     }
 

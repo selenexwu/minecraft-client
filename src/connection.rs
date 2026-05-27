@@ -147,11 +147,11 @@ impl Connection {
                 }
                 val if val == RegistryDataPacket::ID => {
                     // let resp = self.recv_packet::<RegistryDataPacket>()?;
-                    let resp = self.recv_packet_raw(&resp_header)?;
+                    let _resp = self.recv_packet_raw(&resp_header)?;
                     // eprintln!("{:?}", resp);
                 }
                 val if val == ConfigurationUpdateTagsPacket::ID => {
-                    let resp = self.recv_packet::<ConfigurationUpdateTagsPacket>()?;
+                    let _resp = self.recv_packet::<ConfigurationUpdateTagsPacket>()?;
                     // eprintln!("{:?}", resp);
                 }
                 val if val == FinishConfigurationPacket::ID => {
@@ -204,12 +204,12 @@ impl Connection {
                     eprintln!("{:?}", resp);
                 }
                 val if val == UpdateRecipesPacket::ID => {
-                    let resp = self.recv_packet::<UpdateRecipesPacket>()?;
-                    eprintln!("{:?}", resp);
+                    let _resp = self.recv_packet::<UpdateRecipesPacket>()?;
+                    // eprintln!("{:?}", resp);
                 }
                 _ => {
                     eprintln!("{:?}", resp_header);
-                    let resp = self.recv_packet_raw(&resp_header)?;
+                    let _resp = self.recv_packet_raw(&resp_header)?;
                     // eprintln!("{:?}", resp);
                     break;
                 }
