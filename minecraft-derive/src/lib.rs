@@ -8,7 +8,7 @@ use syn::{
 
 #[derive(Clone)]
 struct MyField {
-    ident: Member,
+    ident: Ident,
     ty: Type,
     cond: Option<Expr>,
 }
@@ -61,11 +61,12 @@ fn derive_minecraft_data_for_fields(
     writer_id: &Ident,
     raw_fields: Fields,
     constructor: TokenStream2,
-) -> Result<(TokenStream2, TokenStream2, TokenStream2), TokenStream2> {
+) -> Result<(TokenStream2, TokenStream2, TokenStream2, TokenStream2), TokenStream2> {
     let is_named = matches!(raw_fields, syn::Fields::Named(_));
     let members = raw_fields.members().collect::<Vec<_>>();
     let mut fields = Vec::new();
-    for (f, ident) in raw_fields.into_iter().zip(members.iter().cloned()) {
+    let mut idents = Vec::new();
+    for (f, member) in raw_fields.clone().into_iter().zip(members.iter().cloned()) {
         let cond = if let Some(attr) = f
             .attrs
             .iter()
@@ -84,6 +85,11 @@ fn derive_minecraft_data_for_fields(
         } else {
             None
         };
+        let ident = match member {
+            Member::Named(i) => i,
+            Member::Unnamed(i) => format_ident!("__field{}", i),
+        };
+        idents.push(ident.clone());
         fields.push(MyField {
             ident,
             ty: f.ty,
@@ -118,30 +124,40 @@ fn derive_minecraft_data_for_fields(
             }
         }
     };
+    let match_arm = match &raw_fields {
+        Fields::Unit => quote! {#constructor},
+        Fields::Unnamed(_) => quote! {#constructor(#(#idents),*)},
+        Fields::Named(_) => quote! {#constructor{#(#idents),*}},
+    };
     let encode_lines = fields.iter().map(|MyField { ident, cond, .. }| match cond {
         Some(_) => quote! {
-            if let Some(val) = self.#ident {
+            if let Some(val) = #ident {
                 crate::datatypes::MinecraftData::encode(val, #writer_id)?;
             }
         },
-        None => quote! {crate::datatypes::MinecraftData::encode(self.#ident, #writer_id)?;},
+        None => quote! {crate::datatypes::MinecraftData::encode(#ident, #writer_id)?;},
     });
     let num_bytes_lines = fields.iter().map(|MyField { ident, cond, .. }| match cond {
         Some(_) => quote! {
-            if let Some(val) = &self.#ident {
+            if let Some(val) = #ident {
                 crate::datatypes::MinecraftData::num_bytes(val)
             } else {
                 0
             }
         },
-        None => quote! {crate::datatypes::MinecraftData::num_bytes(&self.#ident)},
+        None => quote! {crate::datatypes::MinecraftData::num_bytes(#ident)},
     });
     let num_bytes_expr = if members.len() == 0 {
         quote! {0}
     } else {
         quote! {(#(#num_bytes_lines)+*)}
     };
-    return Ok((decode_block, quote! {#(#encode_lines)*}, num_bytes_expr));
+    return Ok((
+        match_arm,
+        decode_block,
+        quote! {#(#encode_lines)*},
+        num_bytes_expr,
+    ));
 }
 
 fn derive_minecraft_data_for_struct(name: Ident, data: DataStruct) -> TokenStream {
@@ -150,7 +166,7 @@ fn derive_minecraft_data_for_struct(name: Ident, data: DataStruct) -> TokenStrea
 
     match derive_minecraft_data_for_fields(&reader_id, &writer_id, data.fields, quote! {Self}) {
         Err(msg) => return msg.into(),
-        Ok((decode_block, encode_lines, num_bytes_expr)) => {
+        Ok((match_arm, decode_block, encode_expr, num_bytes_expr)) => {
             let decode_body = quote! {Ok(#decode_block)};
             quote!{
                 impl crate::datatypes::MinecraftData for #name {
@@ -159,12 +175,16 @@ fn derive_minecraft_data_for_struct(name: Ident, data: DataStruct) -> TokenStrea
                     }
 
                     fn encode<W: ::std::io::Write>(self, #writer_id: &mut W) -> ::std::result::Result<(), crate::datatypes::Error> {
-                        #encode_lines
+                        match self {
+                            #match_arm => { #encode_expr }
+                        }
                         Ok(())
                     }
 
                     fn num_bytes(&self) -> usize {
-                        #num_bytes_expr
+                        match self {
+                            #match_arm => #num_bytes_expr
+                        }
                     }
                 }
             }.into()
@@ -177,13 +197,18 @@ fn derive_minecraft_data_for_enum(name: Ident, data: DataEnum) -> TokenStream {
     let writer_id = format_ident!("writer");
     let mut idents = Vec::new();
     let mut reprs: Vec<Expr> = Vec::new();
+    let mut match_arms = Vec::new();
+    let mut decode_blocks = Vec::new();
+    let mut encode_exprs = Vec::new();
+    let mut num_bytes_exprs = Vec::new();
     for v in data.variants.into_iter() {
-        if !matches!(v.fields, syn::Fields::Unit) {
-            return quote!(compile_error!(
-                "Can only derive(MinecraftData) on unit-only enum"
-            );)
-            .into();
-        }
+        // TODO: delete
+        // if !matches!(v.fields, syn::Fields::Unit) {
+        //     return quote!(compile_error!(
+        //         "Can only derive(MinecraftData) on unit-only enum"
+        //     );)
+        //     .into();
+        // }
         let ident = v.ident;
         let repr = if let Some(attr) = v.attrs.iter().find(|attr| attr.path().is_ident("mc_repr")) {
             match attr.parse_args() {
@@ -194,6 +219,21 @@ fn derive_minecraft_data_for_enum(name: Ident, data: DataEnum) -> TokenStream {
             return quote!(compile_error!("Each variant needs a repr");).into();
         };
 
+        match derive_minecraft_data_for_fields(
+            &reader_id,
+            &writer_id,
+            v.fields,
+            quote! {Self::#ident},
+        ) {
+            Err(msg) => return msg.into(),
+            Ok((match_arm, decode_block, encode_expr, num_bytes_expr)) => {
+                match_arms.push(match_arm);
+                decode_blocks.push(decode_block);
+                encode_exprs.push(encode_expr);
+                num_bytes_exprs.push(num_bytes_expr);
+            }
+        }
+
         idents.push(ident);
         reprs.push(repr);
     }
@@ -202,21 +242,22 @@ fn derive_minecraft_data_for_enum(name: Ident, data: DataEnum) -> TokenStream {
         impl crate::datatypes::MinecraftData for #name {
             fn decode<R: ::std::io::Read>(#reader_id: &mut R) -> ::std::result::Result<Self, crate::datatypes::Error> {
                 match crate::datatypes::MinecraftData::decode(#reader_id)? {
-                    #(#reprs => Ok(Self::#idents),)*
+                    #(#reprs => Ok(#decode_blocks),)*
                     _ => Err(anyhow!("Invalid #name")),
                 }
             }
 
             fn encode<W: ::std::io::Write>(self, #writer_id: &mut W) -> ::std::result::Result<(), crate::datatypes::Error> {
                 match self {
-                    #(Self::#idents => #reprs,)*
-                }.encode(#writer_id)
+                    #(#match_arms => { crate::datatypes::MinecraftData::encode(#reprs, #writer_id)?; #encode_exprs })*
+                };
+                Ok(())
             }
 
             fn num_bytes(&self) -> usize {
                 match self {
-                    #(Self::#idents => #reprs,)*
-                }.num_bytes()
+                    #(#match_arms => crate::datatypes::MinecraftData::num_bytes(&#reprs) + #num_bytes_exprs,)*
+                }
             }
         }
     }.into()

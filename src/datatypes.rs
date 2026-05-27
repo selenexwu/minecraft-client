@@ -277,6 +277,20 @@ impl<T: MinecraftData> MinecraftData for Option<T> {
     }
 }
 
+impl<T: MinecraftData> MinecraftData for Box<T> {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
+        Ok(Box::new(T::decode(reader)?))
+    }
+
+    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
+        (*self).encode(writer)
+    }
+
+    fn num_bytes(&self) -> usize {
+        (**self).num_bytes()
+    }
+}
+
 #[derive(Debug, Clone, MinecraftData)]
 pub struct GameProfileProperty {
     pub name: MString<64>,
@@ -373,127 +387,29 @@ pub struct Slot {
     components_remove: Option<UnimplementedData>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, MinecraftData)]
 pub enum SlotDisplay {
+    #[mc_repr(VarInt(0))]
     Empty,
+    #[mc_repr(VarInt(1))]
     AnyFuel,
-    Item {
-        item_type: VarInt,
-    },
-    ItemStack {
-        item_stack: Slot,
-    },
-    Tag {
-        tag: Identifier,
-    },
+    #[mc_repr(VarInt(2))]
+    Item { item_type: VarInt },
+    #[mc_repr(VarInt(3))]
+    ItemStack { item_stack: Slot },
+    #[mc_repr(VarInt(4))]
+    Tag { tag: Identifier },
+    #[mc_repr(VarInt(5))]
     SmithingTrim {
         base: Box<SlotDisplay>,
         material: Box<SlotDisplay>,
         pattern: VarInt,
     },
+    #[mc_repr(VarInt(6))]
     WithRemainder {
         ingredient: Box<SlotDisplay>,
         remainder: Box<SlotDisplay>,
     },
-    Composite {
-        options: Vec<SlotDisplay>,
-    },
-}
-
-// TODO: this should be macroable
-impl MinecraftData for SlotDisplay {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, Error> {
-        match VarInt::decode(reader)? {
-            VarInt(0) => Ok(Self::Empty),
-            VarInt(1) => Ok(Self::AnyFuel),
-            VarInt(2) => Ok(Self::Item {
-                item_type: VarInt::decode(reader)?,
-            }),
-            VarInt(3) => Ok(Self::ItemStack {
-                item_stack: Slot::decode(reader)?,
-            }),
-            VarInt(4) => Ok(Self::Tag {
-                tag: Identifier::decode(reader)?,
-            }),
-            VarInt(5) => Ok(Self::SmithingTrim {
-                base: Box::new(SlotDisplay::decode(reader)?),
-                material: Box::new(SlotDisplay::decode(reader)?),
-                pattern: VarInt::decode(reader)?,
-            }),
-            VarInt(6) => Ok(Self::WithRemainder {
-                ingredient: Box::new(SlotDisplay::decode(reader)?),
-                remainder: Box::new(SlotDisplay::decode(reader)?),
-            }),
-            VarInt(7) => Ok(Self::Composite {
-                options: Vec::decode(reader)?,
-            }),
-            _ => Err(anyhow!("Invalid SlotDisplay")),
-        }
-    }
-
-    fn encode<W: Write>(self, writer: &mut W) -> Result<(), Error> {
-        match self {
-            SlotDisplay::Empty => VarInt(0).encode(writer),
-            SlotDisplay::AnyFuel => VarInt(1).encode(writer),
-            SlotDisplay::Item { item_type } => {
-                VarInt(2).encode(writer)?;
-                item_type.encode(writer)
-            }
-            SlotDisplay::ItemStack { item_stack } => {
-                VarInt(3).encode(writer)?;
-                item_stack.encode(writer)
-            }
-            SlotDisplay::Tag { tag } => {
-                VarInt(4).encode(writer)?;
-                tag.encode(writer)
-            }
-            SlotDisplay::SmithingTrim {
-                base,
-                material,
-                pattern,
-            } => {
-                VarInt(5).encode(writer)?;
-                base.encode(writer)?;
-                material.encode(writer)?;
-                pattern.encode(writer)
-            }
-            SlotDisplay::WithRemainder {
-                ingredient,
-                remainder,
-            } => {
-                VarInt(6).encode(writer)?;
-                ingredient.encode(writer)?;
-                remainder.encode(writer)
-            }
-            SlotDisplay::Composite { options } => {
-                VarInt(7).encode(writer)?;
-                options.encode(writer)
-            }
-        }
-    }
-
-    fn num_bytes(&self) -> usize {
-        match self {
-            SlotDisplay::Empty => VarInt(0).num_bytes(),
-            SlotDisplay::AnyFuel => VarInt(1).num_bytes(),
-            SlotDisplay::Item { item_type } => VarInt(2).num_bytes() + item_type.num_bytes(),
-            SlotDisplay::ItemStack { item_stack } => VarInt(3).num_bytes() + item_stack.num_bytes(),
-            SlotDisplay::Tag { tag } => VarInt(4).num_bytes() + tag.num_bytes(),
-            SlotDisplay::SmithingTrim {
-                base,
-                material,
-                pattern,
-            } => {
-                VarInt(5).num_bytes()
-                    + base.num_bytes()
-                    + material.num_bytes()
-                    + pattern.num_bytes()
-            }
-            SlotDisplay::WithRemainder {
-                ingredient,
-                remainder,
-            } => VarInt(6).num_bytes() + ingredient.num_bytes() + remainder.num_bytes(),
-            SlotDisplay::Composite { options } => VarInt(7).num_bytes() + options.num_bytes(),
-        }
-    }
+    #[mc_repr(VarInt(7))]
+    Composite { options: Vec<SlotDisplay> },
 }
