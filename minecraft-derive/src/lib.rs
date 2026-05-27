@@ -1,9 +1,9 @@
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, AngleBracketedGenericArguments, Attribute, Data, DataEnum, DataStruct,
-    DeriveInput, Expr, GenericArgument, Ident, Member, Path, PathArguments, PathSegment, Type,
-    TypePath,
+    parse_macro_input, AngleBracketedGenericArguments, Data, DataEnum, DataStruct, DeriveInput,
+    Expr, Fields, GenericArgument, Ident, Member, Path, PathArguments, PathSegment, Type, TypePath,
 };
 
 #[derive(Clone)]
@@ -56,27 +56,30 @@ fn optional_type(ty: &Type) -> Option<&Type> {
     }
 }
 
-fn derive_minecraft_data_for_struct(name: Ident, data: DataStruct) -> TokenStream {
-    let reader_id = format_ident!("reader");
-    let writer_id = format_ident!("writer");
-    let is_named = matches!(data.fields, syn::Fields::Named(_));
-    let members = data.fields.members().collect::<Vec<_>>();
+fn derive_minecraft_data_for_fields(
+    reader_id: &Ident,
+    writer_id: &Ident,
+    raw_fields: Fields,
+    constructor: TokenStream2,
+) -> Result<(TokenStream2, TokenStream2, TokenStream2), TokenStream2> {
+    let is_named = matches!(raw_fields, syn::Fields::Named(_));
+    let members = raw_fields.members().collect::<Vec<_>>();
     let mut fields = Vec::new();
-    for (f, ident) in data.fields.into_iter().zip(members.iter().cloned()) {
+    for (f, ident) in raw_fields.into_iter().zip(members.iter().cloned()) {
         let cond = if let Some(attr) = f
             .attrs
             .iter()
             .find(|attr| attr.path().is_ident("present_if"))
         {
             if optional_type(&f.ty).is_none() {
-                return quote! {compile_error!("present_if is only valid on fields of type Option<T>");}.into();
+                return Err(quote! {compile_error!("present_if is only valid on fields of type Option<T>");}.into());
             }
             if !is_named {
-                return quote! {compile_error!{"present_if is only valid on structs with named fields"};}.into();
+                return Err(quote! {compile_error!{"present_if is only valid on structs with named fields"};}.into());
             }
             match attr.parse_args() {
                 Ok(exp) => Some(exp),
-                Err(e) => return e.into_compile_error().into(),
+                Err(e) => return Err(e.into_compile_error().into()),
             }
         } else {
             None
@@ -89,7 +92,7 @@ fn derive_minecraft_data_for_struct(name: Ident, data: DataStruct) -> TokenStrea
     }
 
     let decode_expr = quote! {crate::datatypes::MinecraftData::decode(#reader_id)?};
-    let decode_body = if is_named {
+    let decode_block = if is_named {
         let decode_lines = fields.iter().map(|MyField { ident, cond, ty }| {
             let rvalue = if let Some(cond) = cond {
                 quote! {if #cond { Some(#decode_expr) } else { None }}
@@ -99,17 +102,20 @@ fn derive_minecraft_data_for_struct(name: Ident, data: DataStruct) -> TokenStrea
             quote! {let #ident: #ty = #rvalue;}
         });
         quote! {
-            #(#decode_lines)*
-            Ok(Self {
-                #(#members),*
-            })
+            {
+                #(#decode_lines)*
+                #constructor {
+                    #(#members),*
+                }
+            }
         }
     } else {
         quote! {
-            Ok(Self {
-                #(#members: #decode_expr),*
-
-            })
+            {
+                #constructor {
+                    #(#members: #decode_expr),*
+                }
+            }
         }
     };
     let encode_lines = fields.iter().map(|MyField { ident, cond, .. }| match cond {
@@ -130,27 +136,40 @@ fn derive_minecraft_data_for_struct(name: Ident, data: DataStruct) -> TokenStrea
         },
         None => quote! {crate::datatypes::MinecraftData::num_bytes(&self.#ident)},
     });
-    let num_bytes_body = if members.len() == 0 {
+    let num_bytes_expr = if members.len() == 0 {
         quote! {0}
     } else {
-        quote! {#(#num_bytes_lines)+*}
+        quote! {(#(#num_bytes_lines)+*)}
     };
-    quote!{
-        impl crate::datatypes::MinecraftData for #name {
-            fn decode<R: ::std::io::Read>(#reader_id: &mut R) -> ::std::result::Result<Self, crate::datatypes::Error> {
-                #decode_body
-            }
+    return Ok((decode_block, quote! {#(#encode_lines)*}, num_bytes_expr));
+}
 
-            fn encode<W: ::std::io::Write>(self, #writer_id: &mut W) -> ::std::result::Result<(), crate::datatypes::Error> {
-                #(#encode_lines)*
-                Ok(())
-            }
+fn derive_minecraft_data_for_struct(name: Ident, data: DataStruct) -> TokenStream {
+    let reader_id = format_ident!("reader");
+    let writer_id = format_ident!("writer");
 
-            fn num_bytes(&self) -> usize {
-                #num_bytes_body
-            }
+    match derive_minecraft_data_for_fields(&reader_id, &writer_id, data.fields, quote! {Self}) {
+        Err(msg) => return msg.into(),
+        Ok((decode_block, encode_lines, num_bytes_expr)) => {
+            let decode_body = quote! {Ok(#decode_block)};
+            quote!{
+                impl crate::datatypes::MinecraftData for #name {
+                    fn decode<R: ::std::io::Read>(#reader_id: &mut R) -> ::std::result::Result<Self, crate::datatypes::Error> {
+                        #decode_body
+                    }
+
+                    fn encode<W: ::std::io::Write>(self, #writer_id: &mut W) -> ::std::result::Result<(), crate::datatypes::Error> {
+                        #encode_lines
+                        Ok(())
+                    }
+
+                    fn num_bytes(&self) -> usize {
+                        #num_bytes_expr
+                    }
+                }
+            }.into()
         }
-    }.into()
+    }
 }
 
 fn derive_minecraft_data_for_enum(name: Ident, data: DataEnum) -> TokenStream {
@@ -166,7 +185,6 @@ fn derive_minecraft_data_for_enum(name: Ident, data: DataEnum) -> TokenStream {
             .into();
         }
         let ident = v.ident;
-        // TODO: do something smarter here so that we don't have to specify it literally every time
         let repr = if let Some(attr) = v.attrs.iter().find(|attr| attr.path().is_ident("mc_repr")) {
             match attr.parse_args() {
                 Ok(exp) => exp,
